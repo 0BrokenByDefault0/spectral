@@ -180,7 +180,25 @@ class VocalProfile(BaseModel):
     analysis_notes: list[str] = Field(default_factory=list)
 
 
-# --- Recommendations (Phase 2 consumes these) ------------------------------
+# --- Plugin catalog --------------------------------------------------------
+
+
+class PluginEntry(BaseModel):
+    """One row of the plugin catalog, as it appears in `data/plugins.json`."""
+
+    name: str
+    vendor: str
+    category: ProcessingCategory
+    tier: Tier
+    price_usd: float = Field(ge=0.0)
+    price: str
+    purchase_url: str | None = None
+    rating: float = Field(ge=0.0, le=5.0, description="Editorial pick strength, not a review")
+    tags: list[str] = Field(default_factory=list)
+    why: str
+
+
+# --- Recommendations -------------------------------------------------------
 
 
 class PluginRecommendation(BaseModel):
@@ -196,3 +214,10 @@ class PluginRecommendation(BaseModel):
 class SignalChain(BaseModel):
     tier: Tier
     steps: list[PluginRecommendation]
+
+
+class AnalysisResult(BaseModel):
+    """What one run of the pipeline produces — the payload of `POST /analyze`."""
+
+    profile: VocalProfile
+    chains: list[SignalChain] = Field(default_factory=list)

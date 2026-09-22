@@ -1,7 +1,8 @@
-"""Phase 1 CLI: analyse a recording and print the profile.
+"""CLI: analyse a recording, then print the profile and the three plugin chains.
 
     python -m app.cli take.wav --genre "bedroom rap"
-    python -m app.cli take.wav --no-llm --json profile.json
+    python -m app.cli take.wav --no-llm --json result.json
+    python -m app.cli take.wav --tier FREE
 """
 
 from __future__ import annotations
@@ -12,7 +13,9 @@ from pathlib import Path
 
 from app.analysis import spectral
 from app.analysis.pipeline import analyze_file
-from app.models.schemas import VocalProfile
+from app.db.repository import CatalogUnavailableError, PluginCatalog
+from app.models.schemas import AnalysisResult, SignalChain, Tier, VocalProfile
+from app.recommendation.chain_builder import build_chains
 
 _BAR_WIDTH = 24
 
@@ -24,7 +27,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-llm", action="store_true", help="Skip the Gemini listening pass entirely"
     )
-    parser.add_argument("--json", type=Path, help="Also write the full profile as JSON here")
+    parser.add_argument(
+        "--tier",
+        type=str.upper,
+        choices=[tier.value for tier in Tier],
+        help="Only build the chain for this tier (default: all three)",
+    )
+    parser.add_argument("--no-chains", action="store_true", help="Analysis only, no chains")
+    parser.add_argument("--json", type=Path, help="Also write the full result as JSON here")
     args = parser.parse_args(argv)
 
     if not args.audio.exists():
@@ -37,9 +47,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"cannot analyse: {exc}", file=sys.stderr)
         return 1
 
+    chains: list[SignalChain] = []
+    if not args.no_chains:
+        tiers = (Tier(args.tier),) if args.tier else (Tier.FREE, Tier.MID, Tier.PREMIUM)
+        try:
+            chains = build_chains(profile, PluginCatalog.load(), tiers=tiers)
+        except CatalogUnavailableError as exc:
+            print(f"skipping chains: {exc}", file=sys.stderr)
+
     print(render(profile, args.audio))
+    for chain in chains:
+        print()
+        print(render_chain(chain))
+
     if args.json:
-        args.json.write_text(profile.model_dump_json(indent=2))
+        result = AnalysisResult(profile=profile, chains=chains)
+        args.json.write_text(result.model_dump_json(indent=2))
         print(f"\nwrote {args.json}")
     return 0
 
@@ -101,6 +124,34 @@ def render(profile: VocalProfile, audio: Path) -> str:
     if profile.analysis_notes:
         lines += ["", "--- notes ---", *(f"* {note}" for note in profile.analysis_notes)]
     return "\n".join(lines)
+
+
+def render_chain(chain: SignalChain) -> str:
+    """Format one tier's signal chain, in signal order."""
+    # A plugin used twice in a chain is bought once.
+    total = sum(_price_of(price) for price in {s.plugin_name: s.price for s in chain.steps}.values())
+    lines = [
+        f"--- {chain.tier.value} chain ({len(chain.steps)} steps, "
+        f"{'free' if total == 0 else f'about ${total:.0f} to buy outright'}) ---",
+        " → ".join(step.plugin_name for step in chain.steps),
+        "",
+    ]
+    for position, step in enumerate(chain.steps, start=1):
+        lines.append(f"{position}. {step.plugin_name} [{step.category.value}] {step.price}")
+        lines.append(f"   {step.suggested_settings}")
+        lines.append(f"   why: {step.why}")
+        if step.purchase_url:
+            lines.append(f"   {step.purchase_url}")
+    return "\n".join(lines)
+
+
+def _price_of(price: str) -> float:
+    """Pull a number out of a display price like '$49' or 'Free (ReaPlugs)'."""
+    digits = "".join(c for c in price if c.isdigit() or c == ".")
+    try:
+        return float(digits)
+    except ValueError:
+        return 0.0
 
 
 def _bar(deviation_db: float, span_db: float = 12.0) -> str:
