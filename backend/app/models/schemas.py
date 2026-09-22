@@ -59,6 +59,10 @@ class BandScore(BaseModel):
         description="Deviation from the reference balance, in dB. Positive = too much."
     )
     severity: Severity
+    scored: bool = Field(
+        default=True,
+        description="False when the source carries no content here, so the band was not judged",
+    )
 
 
 class DynamicRange(BaseModel):
@@ -104,6 +108,9 @@ class SpectralFeatures(BaseModel):
 
     duration_s: float
     sample_rate: int
+    bandwidth_hz: float = Field(
+        default=0.0, description="Highest frequency the source actually carries"
+    )
     frequency_bands: dict[str, BandScore]
     dynamic_range: DynamicRange
     noise_floor: NoiseFloor
@@ -168,6 +175,7 @@ class VocalProfile(BaseModel):
     """The unified analysis result the recommendation engine consumes."""
 
     source: SourceDetection
+    bandwidth_hz: float = Field(default=0.0)
     frequency_bands: dict[str, BandScore]
     dynamic_range: DynamicRange
     noise_floor: NoiseFloor

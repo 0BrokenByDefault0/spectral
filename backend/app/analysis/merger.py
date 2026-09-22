@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.analysis.spectral import BAND_LIMIT_HZ
 from app.models.schemas import (
     ProcessingCategory,
     QualitativeAnalysis,
@@ -54,9 +55,15 @@ def merge(
     candidates = derive_spectral_issues(spectral)
     issues = _reconcile(candidates, qualitative)
 
+    all_notes = list(notes or [])
+    bandwidth_note = _bandwidth_note(spectral)
+    if bandwidth_note:
+        all_notes.append(bandwidth_note)
+
     summary = qualitative.summary if qualitative else summarize(spectral, issues)
     return VocalProfile(
         source=source,
+        bandwidth_hz=spectral.bandwidth_hz,
         frequency_bands=spectral.frequency_bands,
         dynamic_range=spectral.dynamic_range,
         noise_floor=spectral.noise_floor,
@@ -66,7 +73,26 @@ def merge(
         issues=issues,
         qualitative_summary=summary,
         genre=genre,
-        analysis_notes=list(notes or []),
+        analysis_notes=all_notes,
+    )
+
+
+def _bandwidth_note(spectral: SpectralFeatures) -> str | None:
+    """Say so when the source itself is the ceiling, and name the bands left unjudged.
+
+    Real home recordings are often phone captures or lossy files that stop dead at 6-10
+    kHz. Telling somebody to boost 8 kHz on a source that ends at 6 kHz is advice that
+    can only add noise, so those bands are not scored and the real fix is named instead.
+    """
+    if spectral.bandwidth_hz >= BAND_LIMIT_HZ:
+        return None
+
+    unscored = [name for name, band in spectral.frequency_bands.items() if not band.scored]
+    tail = f" The {', '.join(unscored)} band(s) were left unscored." if unscored else ""
+    return (
+        f"The source stops at about {spectral.bandwidth_hz / 1000:.1f} kHz — a phone "
+        "recording, a lossy file, or a low sample rate somewhere in the chain. No EQ can "
+        f"put back what was never captured; a better source is the fix.{tail}"
     )
 
 
@@ -89,7 +115,7 @@ def _band_issues(spectral: SpectralFeatures) -> list[_Candidate]:
     issues: list[_Candidate] = []
     for name, rule in _BAND_RULES.items():
         band = spectral.frequency_bands.get(name)
-        if band is None:
+        if band is None or not band.scored:
             continue
         for direction, label, tags, blurb in rule:
             deviation = band.deviation_db * direction

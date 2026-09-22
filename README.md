@@ -90,12 +90,77 @@ Tests drive the analysis with synthetic signals (`tests/synth.py`) built to carr
 the properties being measured — mud, sibilance, hum, reverb, level swings, a drum
 loop. They pin down behaviour and direction, not absolute accuracy.
 
+## Band-limited sources
+
+Real home recordings are often phone captures or lossy files delivered in a 44.1 kHz
+container, with nothing above 6-10 kHz. Telling somebody to boost 8 kHz on a source
+that ends at 8 kHz is advice that can only raise noise, so `spectral.py` measures where
+the source actually stops and bands past that are left unscored (`BandScore.scored`).
+The profile then says what the real fix is — a better source — instead of prescribing
+an EQ move.
+
+The cutoff is found by looking for a *cliff*: a sharp drop that never recovers, which
+is what a codec or a low sample rate leaves behind. A gentle rolloff is a dull mic, not
+a missing band, and still gets the air shelf — there is signal there to lift.
+
+## Calibration
+
+Constants that decide what counts as a problem have to come from recordings, so
+`tools/` measures a labelled corpus and reports what the distributions say those
+constants should be.
+
+```bash
+cd backend
+python -m tools.fetch_mixes --out ~/corpus/mixes --count 40
+python -m tools.calibrate measure ~/corpus/VocalSet --label vocalset --limit 300 --out runs.jsonl
+python -m tools.calibrate measure ~/corpus/vocadito --label vocadito --out runs.jsonl
+python -m tools.calibrate report runs.jsonl
+python -m tools.calibrate propose runs.jsonl --reference vocalset --home vocadito --mix mixes
+```
+
+`report` prints percentile tables per corpus; `propose` prints the constants those
+percentiles imply, each next to its current value. Reference balance comes from the
+median of the good-takes corpus, severity thresholds from how much that corpus varies
+around its own median, the room threshold from whatever best separates treated from
+untreated rooms, and the detector thresholds from where the vocal and mix populations
+actually split.
+
+Corpora used, all under licences permitting commercial use, since these constants ship:
+
+| Corpus | Licence | Role |
+| --- | --- | --- |
+| [VocalSet](https://zenodo.org/records/1193957) | CC BY 4.0 | Studio, dry, professional — the reference for "a good raw take" |
+| [vocadito](https://zenodo.org/records/5578807) | CC BY 4.0 | Amateur home recordings — the untreated-room and band-limited cases |
+| [Choral Singing Dataset](https://zenodo.org/records/1319597) | CC BY 4.0 | Close-mic'd in a treated room |
+| Internet Archive netlabels | CC BY / CC BY-SA / CC0 | Full mixes, for scoring the detector |
+
+MUSDB18 is the obvious corpus for this and is **not** used: its licence forbids
+commercial use, and tuning a product's shipped constants on it is exactly that use.
+`fetch_mixes.py` enforces the same rule on what it downloads — about one netlabel
+release in eight qualifies.
+
+Audio is never committed; only the derived numbers and `fetch_mixes.py`'s attribution
+manifest are.
+
 ## Calibration status
 
 The reference constants in `spectral.py` (`REFERENCE_BALANCE`, the severity
-thresholds, `SIBILANCE_MODERATE`, `ROOM_TREATED_MS`, `PITCH_CORRECTION_CENTS`)
-are first-pass values checked only against synthetic signals. **Phase 1's
-validation gate — running 3-5 real recordings and confirming an engineer would
-agree with the advice — has not been done, and these numbers should be expected
-to move when it is.** They are all in one block at the top of the module for
-that reason.
+thresholds, `SIBILANCE_MODERATE`, `ROOM_TREATED_MS`, `PITCH_CORRECTION_CENTS`) are
+still first-pass values checked only against synthetic signals. The corpus work above
+is how they get replaced, and the first measurements already show the band references
+are far off — real solo vocals sit roughly 8-10 dB below the current `presence` and
+`air` figures, so almost every honest take would be told it lacks both.
+
+The cause is conceptual as much as numerical: those figures describe a *mixed* vocal
+while the input is a *raw take*, which guarantees the deficit. The corpus median of
+good studio takes replaces them.
+
+Two things remain open:
+
+- **Nothing here is validated by ear.** A corpus says what is typical, not what is
+  good; if a corpus shares a flaw, the constants inherit it. Phase 1's validation gate
+  — a handful of real takes where somebody confirms the advice is what they would have
+  said — is still the check that matters, and has not been done.
+- **The corpora are sung, mostly Western, and mostly solo.** Rap, screamed and spoken
+  delivery are thin on the ground in all of them, so the reference is weakest exactly
+  where the product's likely users sit.

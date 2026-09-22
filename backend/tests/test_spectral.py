@@ -113,3 +113,31 @@ def test_silence_does_not_crash():
     features = spectral.analyze_samples(silence, synth.SR)
     assert features.duration_s == pytest.approx(2.0, abs=0.01)
     assert np.isfinite(features.noise_floor.snr_db)
+
+
+def test_full_band_audio_reports_no_cutoff(clean_features):
+    assert clean_features.bandwidth_hz > spectral.BAND_LIMIT_HZ
+    assert all(band.scored for band in clean_features.frequency_bands.values())
+
+
+@pytest.mark.parametrize("cutoff", [8000.0, 11000.0])
+def test_a_hard_cutoff_is_found(clean, cutoff):
+    limited = spectral.analyze_samples(synth.with_lowpass(clean, cutoff), synth.SR)
+    assert limited.bandwidth_hz == pytest.approx(cutoff, rel=0.15)
+
+
+def test_bands_above_the_cutoff_are_not_scored(clean):
+    limited = spectral.analyze_samples(synth.with_lowpass(clean, 8000.0), synth.SR)
+    assert not limited.frequency_bands["ultra_high"].scored
+    assert limited.frequency_bands["ultra_high"].deviation_db == 0.0
+    assert limited.frequency_bands["low_mid"].scored
+    assert limited.frequency_bands["presence"].scored
+
+
+def test_a_gentle_rolloff_is_not_a_cutoff(clean):
+    """A dull mic still has content up top; only a cliff means it is absent."""
+    dark = spectral.analyze_samples(
+        synth.with_band_boost(clean, 6000.0, 22000.0, -18.0), synth.SR
+    )
+    assert dark.bandwidth_hz > spectral.BAND_LIMIT_HZ
+    assert dark.frequency_bands["air"].scored

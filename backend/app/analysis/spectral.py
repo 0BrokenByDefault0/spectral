@@ -54,6 +54,17 @@ BAND_CRITICAL_DB = 6.0
 ANALYSIS_LOW_HZ = 60.0
 ANALYSIS_HIGH_HZ = 16000.0
 
+#: A codec or a low sample rate leaves a cliff: this much drop across this narrow a span,
+#: with nothing above it ever recovering. Phone recordings and lossy sources stop dead
+#: well below Nyquist, and a band that is simply not there must not be scored as a
+#: deficit — no EQ recovers content that was never captured.
+CLIFF_DROP_DB = 20.0
+CLIFF_WINDOW_HZ = 1000.0
+#: A source that stops below this is band-limited: no EQ will recover what is missing.
+BAND_LIMIT_HZ = 14000.0
+#: A band is only scored when at least this much of it lies inside the usable bandwidth.
+MIN_BAND_COVERAGE = 0.75
+
 #: A frame counts as vocal activity if it sits within this many dB of the loudest frame.
 ACTIVE_RANGE_DB = 35.0
 
@@ -109,10 +120,12 @@ def analyze_samples(y: np.ndarray, sr: int) -> SpectralFeatures:
     frame_db = _frame_db(spec)
     active = _active_frames(frame_db)
 
+    bandwidth_hz = _bandwidth_hz(spec[:, active], freqs)
     return SpectralFeatures(
         duration_s=float(y.size / sr),
         sample_rate=sr,
-        frequency_bands=_band_scores(spec[:, active], freqs),
+        bandwidth_hz=bandwidth_hz,
+        frequency_bands=_band_scores(spec[:, active], freqs, bandwidth_hz),
         dynamic_range=_dynamic_range(y, frame_db, active),
         noise_floor=_noise_floor(spec, freqs, frame_db, active),
         room_quality=_room_quality(frame_db, sr),
@@ -148,19 +161,71 @@ def _band_energy(spec: np.ndarray, freqs: np.ndarray, low: float, high: float) -
 # --- individual measurements ----------------------------------------------
 
 
-def _band_scores(active_spec: np.ndarray, freqs: np.ndarray) -> dict[str, BandScore]:
-    total = _band_energy(active_spec, freqs, ANALYSIS_LOW_HZ, ANALYSIS_HIGH_HZ) + _EPS
+def _bandwidth_hz(active_spec: np.ndarray, freqs: np.ndarray) -> float:
+    """The frequency above which the source carries nothing at all.
+
+    This looks for the cliff a codec or a low sample rate leaves behind — a drop to a
+    floor that never recovers — rather than a fixed level below the spectral peak. A
+    vocal's peak is at its fundamental and its top octave is legitimately far below
+    that, so a peak-relative threshold calls every bass-heavy take band-limited.
+    """
+    if active_spec.size == 0:
+        return 0.0
+
+    profile = active_spec.mean(axis=1)
+    db = 10.0 * np.log10(np.convolve(profile, np.ones(9) / 9, mode="same") + _EPS)
+
+    bin_hz = freqs[1] - freqs[0]
+    window = max(1, int(CLIFF_WINDOW_HZ / bin_hz))
+    start = int(np.searchsorted(freqs, 2000.0))
+
+    for index in range(start, len(freqs) - window):
+        before = np.median(db[max(0, index - window) : index])
+        after = np.median(db[index : index + window])
+        # A cliff drops steeply and never comes back; a gentle rolloff is the source's
+        # own character and still has content an air shelf can lift.
+        if before - after > CLIFF_DROP_DB and db[index + window :].max() < before - CLIFF_DROP_DB:
+            return float(freqs[index])
+    return float(freqs[-1])
+
+
+def _band_scores(
+    active_spec: np.ndarray, freqs: np.ndarray, bandwidth_hz: float
+) -> dict[str, BandScore]:
+    usable_high = max(min(ANALYSIS_HIGH_HZ, bandwidth_hz), ANALYSIS_LOW_HZ + 1.0)
+    total = _band_energy(active_spec, freqs, ANALYSIS_LOW_HZ, usable_high) + _EPS
+
+    energies = {
+        name: _band_energy(active_spec, freqs, low, high) / total
+        for name, (low, high) in BANDS.items()
+    }
+    # An absent band is a missing source, not a dull vocal: scoring it would advise
+    # boosting content that does not exist.
+    scored_names = [
+        name
+        for name, (low, high) in BANDS.items()
+        if (min(high, bandwidth_hz) - low) / (high - low) >= MIN_BAND_COVERAGE
+    ]
+
+    # The denominator is the whole usable range, not the sum of the scored bands: a band
+    # is part of its own total, so normalising by that set would let a boosted band
+    # inflate the denominator and hide the very deviation being measured.
     scores: dict[str, BandScore] = {}
     for name, (low, high) in BANDS.items():
-        energy = _band_energy(active_spec, freqs, low, high) / total
-        deviation = 10.0 * np.log10((energy + _EPS) / REFERENCE_BALANCE[name])
+        scored = name in scored_names
+        deviation = (
+            10.0 * np.log10((energies[name] + _EPS) / REFERENCE_BALANCE[name])
+            if scored
+            else 0.0
+        )
         scores[name] = BandScore(
             band_name=name,
             low_hz=low,
             high_hz=high,
-            energy=float(energy),
+            energy=float(energies[name]),
             deviation_db=float(deviation),
             severity=_severity(abs(deviation), BAND_MODERATE_DB, BAND_CRITICAL_DB),
+            scored=scored,
         )
     return scores
 

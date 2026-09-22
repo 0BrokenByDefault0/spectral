@@ -154,3 +154,38 @@ def test_profile_carries_context(muddy_features):
     assert profile.genre == "drill"
     assert profile.analysis_notes == ["separation skipped"]
     assert profile.source.source_type is SourceType.DRY_VOCAL
+
+
+def band_limited_features(cutoff=8000.0):
+    return features(synth.with_lowpass(synth.vocal(), cutoff))
+
+
+def test_a_band_limited_source_is_called_out():
+    profile = merger.merge(band_limited_features(), None, SOURCE)
+    note = " ".join(profile.analysis_notes)
+    assert "stops at about" in note
+    assert "a better source is the fix" in note
+    # The cliff is reported where the fall begins, so the estimate errs slightly low.
+    assert 7000.0 <= profile.bandwidth_hz <= 8000.0
+
+
+def test_no_eq_advice_for_bands_the_source_does_not_have():
+    """Boosting 8 kHz on a source that ends at 8 kHz can only raise noise."""
+    profile = merger.merge(band_limited_features(), None, SOURCE)
+    assert not any(issue.name == "Lacks Air" for issue in profile.issues)
+    assert not profile.frequency_bands["air"].scored
+
+
+def test_a_missing_top_end_does_not_distort_the_bands_that_remain():
+    """Shares are normalised over the usable range, so a cutoff cannot fake mud."""
+    full = features(synth.vocal())
+    limited = band_limited_features()
+    for band in ("low_mid", "boxiness", "presence"):
+        assert limited.frequency_bands[band].deviation_db == pytest.approx(
+            full.frequency_bands[band].deviation_db, abs=0.3
+        )
+
+
+def test_a_full_band_take_gets_no_bandwidth_note():
+    profile = merger.merge(features(synth.vocal()), None, SOURCE)
+    assert not any("stops at about" in note for note in profile.analysis_notes)

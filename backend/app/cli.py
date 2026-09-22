@@ -107,6 +107,7 @@ def render(profile: VocalProfile, audio: Path) -> str:
         f"pitch drift       {pitch.drift_cents:.0f} cents "
         f"(voiced {pitch.voiced_ratio:.0%})",
         f"sibilance         ratio {sib.ratio:.3f} peaking at {sib.peak_freq_hz:.0f} Hz",
+        f"source bandwidth  {profile.bandwidth_hz / 1000:.1f} kHz",
         "",
         f"--- issues ({len(profile.issues)}) ---",
     ]

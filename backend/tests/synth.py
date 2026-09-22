@@ -81,6 +81,14 @@ def with_band_boost(y: np.ndarray, low: float, high: float, gain_db: float, sr: 
     return _normalize(np.fft.irfft(spectrum, n=y.size), 0.5)
 
 
+def with_lowpass(y: np.ndarray, cutoff_hz: float, sr: int = SR) -> np.ndarray:
+    """Cut everything above `cutoff_hz` dead, the way a codec or a phone mic does."""
+    spectrum = np.fft.rfft(y)
+    freqs = np.fft.rfftfreq(y.size, d=1.0 / sr)
+    spectrum[freqs > cutoff_hz] = 0.0
+    return _normalize(np.fft.irfft(spectrum, n=y.size), 0.5)
+
+
 def with_sibilance(y: np.ndarray, sr: int = SR, level: float = 0.5) -> np.ndarray:
     """Add filtered noise bursts where the phrases start, like hard esses."""
     noise = _bandlimited_noise(y.size, sr, 5000.0, 9500.0)
