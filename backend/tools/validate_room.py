@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("corpus", type=Path)
     parser.add_argument("--pattern", default="*.wav")
     parser.add_argument("--limit", type=int, default=8)
-    parser.add_argument("--seconds", type=float, default=30.0)
+    parser.add_argument("--seconds", type=float, default=60.0)
     args = parser.parse_args(argv)
 
     files = sorted(args.corpus.glob(args.pattern))[: args.limit]

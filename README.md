@@ -213,12 +213,30 @@ interrupted-source measurement, which a singer performs for free at every note c
 transitions or — for monotone takes with few note changes — the old phrase-end fallback,
 and how many decays it rests on.
 
-Against rooms of known RT60 it lands within 35% from 0.25 s to 1.2 s and orders them
-correctly, and a dry take with a 1.2 s fade still reads dry. `python -m
-tools.validate_room` repeats that check on real vocals placed in statistical rooms. The
-treated threshold (0.35 s) comes from acoustics rather than a corpus. Two limits: rooms
-past ~1.5 s read low when notes are shorter than the decay, and rap — few sustained
-pitch changes — mostly falls back to the phrase-end estimate.
+**How well it works.** On clean synthetic rooms it is accurate from 0.2 to 1.4 s,
+semitone melodies included. On real vocals — 60-second URSing takes placed in rooms of
+known RT60 — it finds 6-12 clean transitions per take and orders the rooms correctly for
+every singer tested, where the old method read ~0.58 s whatever the room:
+
+| true RT60 | singer A | singer B | singer C |
+| --- | --- | --- | --- |
+| 0.4 s | 0.83 | 0.72 | 0.62 |
+| 0.8 s | 1.07 | 1.20 | 1.01 |
+| 1.4 s | 1.44 | 1.51 | 1.55 |
+
+**What it does not yet settle.** Short rooms read high on real takes. The synthetic
+sweep rules out the estimator's own time resolution as the cause, and the URSing takes
+were not recorded dry — measured untouched they read 0.2-0.9 s — so some of that excess
+is a real room underneath. But on the untouched takes the per-transition estimates also
+scatter widely, and without genuinely dry real vocals there is no way to split the two.
+That is why a take needs at least four clean transitions before this method is trusted;
+fewer, and the phrase-end fallback is used and labelled approximate.
+
+Two structural limits: after small steps in real singing, vibrato on the new note can
+sweep into the gap the old note left, so most transitions give no clean decay — the
+method depends on there being enough of them, which a full take usually supplies and a
+short clip may not. And rap, with few sustained pitch changes, will mostly get the
+fallback. `python -m tools.validate_room` reruns the real-vocal check.
 
 **Genre.** The reference is sung. Rap vocals separated from finished mixes read as "thin
 body" against it 6 times in 8, because rap vocals are deliberately high-passed to leave

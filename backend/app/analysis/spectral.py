@@ -122,22 +122,29 @@ ROOM_TREATED_MS = 350.0
 #: note changes to measure. Slow decays there are the singer's releases, so a low
 #: percentile rather than the middle.
 ROOM_DECAY_PERCENTILE = 20.0
-#: Finer STFT for decay measurement: 5.8 ms per frame, 21.5 Hz per bin — fine enough to
-#: follow a decay and to resolve separate harmonics of a sung note.
-ROOM_N_FFT = 2048
-ROOM_HOP = 256
-#: A transition's old harmonic is only used when it sits clear of every harmonic of the
-#: new note, in both musical distance and bins, so the new note cannot leak into it.
-ORPHAN_MIN_CENTS = 150.0
+#: STFT for decay measurement: 11.6 ms per frame, 10.8 Hz per bin. The frequency
+#: resolution is the point. Real singing moves mostly by semitones and tones at low
+#: pitch, where harmonics sit ~100 Hz apart; after a semitone step the old note's
+#: harmonics fall between the new note's with only 40-50 Hz to spare, which 21.5 Hz bins
+#: cannot resolve and 10.8 Hz bins can.
+ROOM_N_FFT = 4096
+ROOM_HOP = 512
+#: An old harmonic is only used when every harmonic of the new note is at least this far
+#: away — in bins, or as a fraction of its frequency so vibrato on the new note cannot
+#: swing into it — and only a narrow band around it is read.
 ORPHAN_MIN_BINS = 3
+ORPHAN_MIN_FRACTION = 0.03
+ORPHAN_HALF_WIDTH_FRACTION = 0.01
 ORPHAN_BAND = (250.0, 4000.0)
 #: ISO 3382 evaluates a decay from 5 dB below the start, down to 25 dB below (T20).
 DECAY_START_DB = 5.0
 DECAY_END_DB = 25.0
 MIN_DECAY_RANGE_DB = 10.0
 MIN_DECAY_FIT_R2 = 0.8
-#: Fewer transition probes than this and the phrase-end fallback is used instead.
-MIN_TRANSITION_PROBES = 2
+#: Fewer transition probes than this and the phrase-end fallback is used instead. On
+#: real takes, estimates resting on one to three transitions scattered widely while six
+#: or more held steady across singers; four is the least that is not guesswork.
+MIN_TRANSITION_PROBES = 4
 #: Part of each decay to ignore: the singer's own release at the top, the noise at the
 #: bottom. Frames near the floor read high and flatten the fitted decay, but raising
 #: this leaves a very live room — where the gaps never get far above the floor — with
@@ -433,12 +440,10 @@ def _orphaned_bins(old_hz: float, new_hz: float, freqs: np.ndarray) -> np.ndarra
         harmonic = k * old_hz
         if harmonic < ORPHAN_BAND[0]:
             continue
-        cents_away = np.min(np.abs(1200.0 * np.log2(harmonic / new_harmonics)))
-        bins_away = np.min(np.abs(harmonic - new_harmonics)) / bin_hz
-        if cents_away < ORPHAN_MIN_CENTS or bins_away < ORPHAN_MIN_BINS:
+        clearance = np.min(np.abs(harmonic - new_harmonics))
+        if clearance < max(ORPHAN_MIN_BINS * bin_hz, ORPHAN_MIN_FRACTION * harmonic):
             continue
-        # A band of roughly +-50 cents, so vibrato on the old note stays inside it.
-        mask |= np.abs(freqs - harmonic) <= max(bin_hz, 0.03 * harmonic)
+        mask |= np.abs(freqs - harmonic) <= max(bin_hz, ORPHAN_HALF_WIDTH_FRACTION * harmonic)
     return mask
 
 
@@ -468,10 +473,11 @@ def _transition_rt60s(y: np.ndarray, sr: int, f0: np.ndarray, voiced: np.ndarray
         envelope = np.maximum(power[bins].sum(axis=0) - background[bins].sum(), _EPS)
         cut = new_start * per_track_frame
         stop = min(new_stop * per_track_frame, envelope.size)
-        if cut < 12 or stop - cut < 8:
+        lookback = max(2, int(0.07 / frame_s))
+        if cut < lookback or stop - cut < 4:
             continue
 
-        before = 10.0 * np.log10(np.median(envelope[cut - 12 : cut]))
+        before = 10.0 * np.log10(np.median(envelope[cut - lookback : cut]))
         decay = 10.0 * np.log10(envelope[cut:stop]) - before
         estimate = _fit_decay(decay, frame_s)
         if estimate is not None:
