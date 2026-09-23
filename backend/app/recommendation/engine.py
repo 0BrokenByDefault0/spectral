@@ -404,13 +404,13 @@ def _mains_hum(issue: VocalIssue, profile: VocalProfile) -> list[ProcessingStep]
 
 
 def _room_reflections(issue: VocalIssue, profile: VocalProfile) -> list[ProcessingStep]:
-    tail = _evidence(issue, "reverb_tail_ms", profile.room_quality.reverb_tail_ms)
+    tail = _evidence(issue, "rt60_ms", profile.room_quality.reverb_tail_ms)
     return [
         ProcessingStep(
             role=StepRole.NOISE_REDUCTION,
             severity=issue.severity,
             settings=[
-                f"De-reverb by 20-30% — enough to shorten the {tail:.0f} ms tail, not enough "
+                f"De-reverb by 20-30% — enough to shorten the {tail / 1000:.1f} s tail, not enough "
                 "to make the vocal sound like it was recorded in a vacuum. Artifacts here are "
                 "worse than the room"
             ],
@@ -506,8 +506,8 @@ def _spatial_step(profile: VocalProfile) -> ProcessingStep:
     if not room.treated:
         settings = (
             f"Short plate or small room, 0.8-1.2 s, 8-12% wet, pre-delay 30-40 ms, high-pass "
-            f"the return at 300 Hz. Keep it small: the take already carries about "
-            f"{room.reverb_tail_ms:.0f} ms of its own room, and stacking a second space on "
+            f"the return at 300 Hz. Keep it small: the take already carries a room that "
+            f"takes {room.reverb_tail_ms / 1000:.1f} s to die away, and stacking a second space on "
             "that is what makes bedroom vocals sound distant"
         )
         reason = "The recording has audible room on it already, so added space has to be modest."

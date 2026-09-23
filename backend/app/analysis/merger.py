@@ -14,7 +14,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.analysis import scoring
-from app.analysis.spectral import BAND_LIMIT_HZ, BAND_MODERATE_DB, BAND_THRESHOLDS
+from app.analysis.spectral import (
+    BAND_LIMIT_HZ,
+    BAND_MODERATE_DB,
+    BAND_THRESHOLDS,
+    ROOM_TREATED_MS,
+)
 from app.models.schemas import (
     ProcessingCategory,
     QualitativeAnalysis,
@@ -288,19 +293,32 @@ def _noise_issues(spectral: SpectralFeatures) -> list[_Candidate]:
 
 def _room_issues(spectral: SpectralFeatures) -> list[_Candidate]:
     room = spectral.room_quality
-    if room.treated:
+    if room.treated or room.measurement == "none":
         return []
+    how = (
+        f"measured across {room.probes} note changes"
+        if room.measurement == "note transitions"
+        else f"estimated from {room.probes} phrase endings, so treat it as approximate"
+    )
     return [
         _Candidate(
             name="Room Reflections",
             category=ProcessingCategory.NOISE_REDUCTION,
-            severity=Severity.CRITICAL if room.reverb_tail_ms > 350.0 else Severity.MODERATE,
+            # Twice the treated threshold is a live room by any standard: past 0.7 s the
+            # tail smears consonants and no amount of added reverb can sit on top of it.
+            severity=(
+                Severity.CRITICAL
+                if room.reverb_tail_ms > 2 * ROOM_TREATED_MS
+                else Severity.MODERATE
+            ),
             description=(
-                f"Roughly {room.reverb_tail_ms:.0f} ms of decay follows each phrase — the room "
-                "is printed into the recording and will fight any reverb you add later."
+                f"The room takes about {room.reverb_tail_ms / 1000:.1f} s to die away "
+                f"({how}) — it is printed into the recording and will fight any reverb "
+                "you add later."
             ),
             evidence={
-                "reverb_tail_ms": round(room.reverb_tail_ms),
+                "rt60_ms": round(room.reverb_tail_ms),
+                "measured_from": room.measurement,
                 "reflection_level": round(room.reflection_level, 2),
             },
             tags={"room", "reflection", "reverb", "roomy", "slap", "echo", "untreated", "live"},

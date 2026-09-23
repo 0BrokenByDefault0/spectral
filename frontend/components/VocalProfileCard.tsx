@@ -111,9 +111,17 @@ export function VocalProfileCard({
               note={profile.noise_floor.has_hum ? `hum at ${profile.noise_floor.hum_freq_hz?.toFixed(0)} Hz` : undefined}
             />
             <Measurement
-              label="Room tail"
-              value={`${profile.room_quality.reverb_tail_ms.toFixed(0)} ms`}
-              note={profile.room_quality.treated ? "treated" : "live"}
+              label="Room RT60"
+              value={
+                profile.room_quality.measurement === "none"
+                  ? "not measurable"
+                  : `${(profile.room_quality.reverb_tail_ms / 1000).toFixed(2)} s`
+              }
+              note={
+                profile.room_quality.measurement === "none"
+                  ? undefined
+                  : `${profile.room_quality.treated ? "treated" : "live"}, from ${profile.room_quality.probes} ${profile.room_quality.measurement}`
+              }
             />
             <Measurement
               label="Pitch drift"

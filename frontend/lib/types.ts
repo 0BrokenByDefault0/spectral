@@ -50,9 +50,13 @@ export interface NoiseFloor {
 }
 
 export interface RoomQuality {
+  /** Estimated RT60 in ms. */
   reverb_tail_ms: number;
   treated: boolean;
   reflection_level: number;
+  /** "note transitions", "phrase ends" or "none". */
+  measurement: string;
+  probes: number;
 }
 
 export interface PitchStability {

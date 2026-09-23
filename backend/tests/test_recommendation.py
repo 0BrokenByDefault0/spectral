@@ -243,9 +243,9 @@ def test_a_wide_dynamic_swing_suggests_two_stages():
 
 
 def test_space_advice_depends_on_the_room():
-    live = step_for(plan(profile_with(treated=False, tail=400.0)), StepRole.SPATIAL)
+    live = step_for(plan(profile_with(treated=False, tail=700.0)), StepRole.SPATIAL)
     assert "Keep it small" in live.settings_text()
-    assert "400 ms" in live.settings_text()
+    assert "0.7 s to die away" in live.settings_text()
 
     dry = step_for(plan(profile_with(treated=True)), StepRole.SPATIAL)
     assert "Keep it small" not in dry.settings_text()

@@ -204,6 +204,21 @@ def with_slow_release(y: np.ndarray, release_s: float = 0.8, sr: int = SR) -> np
     return _normalize(faded, 0.5)
 
 
+def with_room(y: np.ndarray, rt60: float, sr: int = SR, seed: int = 55) -> np.ndarray:
+    """Place a signal in a statistical room with a known RT60.
+
+    Exponentially decaying noise (Polack's model) plus a direct path: the standard way to
+    test a blind reverberation estimator, since RT60 is defined by exactly this decay.
+    """
+    samples = int(rt60 * 1.5 * sr)
+    t = np.arange(samples) / sr
+    tail = _rng(seed).normal(0.0, 1.0, samples) * np.exp(-6.908 * t / rt60)
+    tail[: int(0.002 * sr)] = 0.0
+    tail /= np.sqrt(np.sum(tail**2))
+    tail[0] += 1.0
+    return _normalize(np.convolve(y, tail)[: y.size], 0.5)
+
+
 def with_dynamics(y: np.ndarray, spread_db: float = 20.0, sr: int = SR) -> np.ndarray:
     """Swing the level slowly so loud and quiet passages differ by `spread_db`."""
     t = np.arange(y.size) / sr

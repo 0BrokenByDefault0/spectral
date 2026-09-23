@@ -203,12 +203,22 @@ reference corpus, 1.8 on amateur phone recordings (mostly noise floor, correctly
 
 ### What is still open
 
-**The room.** No corpus settles it, because a decaying envelope is equally a room ringing
-and a singer releasing a note, and reverb is the voice's own harmonics so voicing cannot
-separate them either. The best split found between a studio corpus and a bedroom one was
-57% — chance. The next step is ground truth rather than another corpus: convolve dry
-takes with impulse responses of published RT60 and check the measured tail tracks the
-known value.
+**The room — now measured differently.** No corpus could settle it, because a decaying
+envelope is equally a room ringing and a singer releasing a note. The fix is to stop
+watching the voice. A voice sounds one pitch at a time, so when the singer changes note
+the old note's harmonics stop being driven *at once*, however slowly the singer's level
+falls; whatever still sounds at those frequencies is the room. That is the ISO 3382
+interrupted-source measurement, which a singer performs for free at every note change.
+`RoomQuality.reverb_tail_ms` is now a true RT60, and says whether it came from note
+transitions or — for monotone takes with few note changes — the old phrase-end fallback,
+and how many decays it rests on.
+
+Against rooms of known RT60 it lands within 35% from 0.25 s to 1.2 s and orders them
+correctly, and a dry take with a 1.2 s fade still reads dry. `python -m
+tools.validate_room` repeats that check on real vocals placed in statistical rooms. The
+treated threshold (0.35 s) comes from acoustics rather than a corpus. Two limits: rooms
+past ~1.5 s read low when notes are shorter than the decay, and rap — few sustained
+pitch changes — mostly falls back to the phrase-end estimate.
 
 **Genre.** The reference is sung. Rap vocals separated from finished mixes read as "thin
 body" against it 6 times in 8, because rap vocals are deliberately high-passed to leave

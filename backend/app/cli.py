@@ -112,8 +112,13 @@ def render(profile: VocalProfile, audio: Path) -> str:
         f"signal-to-noise   {noise.snr_db:.1f} dB"
         + (f", hum at {noise.hum_freq_hz:.0f} Hz" if noise.has_hum else "")
         + (", broadband noise" if noise.has_broadband else ""),
-        f"room tail         {room.reverb_tail_ms:.0f} ms "
-        f"({'treated' if room.treated else 'live'})",
+        f"room RT60         "
+        + (
+            f"{room.reverb_tail_ms / 1000:.2f} s ({'treated' if room.treated else 'live'}, "
+            f"from {room.probes} {room.measurement})"
+            if room.measurement != "none"
+            else "not measurable in this take"
+        ),
         f"pitch drift       {pitch.drift_cents:.0f} cents "
         f"(voiced {pitch.voiced_ratio:.0%})",
         f"sibilance         ratio {sib.ratio:.3f} peaking at {sib.peak_freq_hz:.0f} Hz",

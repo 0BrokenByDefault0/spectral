@@ -188,3 +188,52 @@ def test_a_live_room_still_reads_as_live(clean):
     released = spectral.analyze_samples(synth.with_slow_release(clean, 0.8), synth.SR)
     assert wet.room_quality.reverb_tail_ms > released.room_quality.reverb_tail_ms * 3
     assert not wet.room_quality.treated
+
+
+# --- RT60 against ground truth -------------------------------------------------
+
+SCALE = (0, 2, 4, 5, 7, 9, 7, 5, 4, 2, 0, 4, 7, 4)
+
+
+@pytest.fixture(scope="module")
+def legato_scale():
+    return synth.legato_melody(semitones=SCALE)
+
+
+@pytest.mark.parametrize("rt60", [0.25, 0.5, 0.8, 1.2])
+def test_rt60_tracks_a_known_room(legato_scale, rt60):
+    """Measured from note transitions, the estimate lands near the true RT60."""
+    room = spectral.analyze_samples(synth.with_room(legato_scale, rt60), synth.SR).room_quality
+    assert room.measurement == "note transitions"
+    assert room.probes >= spectral.MIN_TRANSITION_PROBES
+    assert room.reverb_tail_ms / 1000.0 == pytest.approx(rt60, rel=0.35)
+
+
+def test_rt60_orders_rooms_correctly(legato_scale):
+    measured = [
+        spectral.analyze_samples(synth.with_room(legato_scale, rt), synth.SR)
+        .room_quality.reverb_tail_ms
+        for rt in (0.3, 0.7, 1.2)
+    ]
+    assert measured == sorted(measured)
+
+
+def test_a_dry_legato_take_offers_no_false_room(legato_scale):
+    """No decay after a note change means no room — not a short one, none measured."""
+    room = spectral.analyze_samples(legato_scale, synth.SR).room_quality
+    assert room.treated
+    assert room.reverb_tail_ms < spectral.ROOM_TREATED_MS
+
+
+def test_the_room_threshold_is_crossed_where_acoustics_puts_it(legato_scale):
+    booth = spectral.analyze_samples(synth.with_room(legato_scale, 0.2), synth.SR)
+    bedroom = spectral.analyze_samples(synth.with_room(legato_scale, 0.7), synth.SR)
+    assert booth.room_quality.treated
+    assert not bedroom.room_quality.treated
+
+
+def test_a_slow_release_in_a_dry_room_still_reads_dry():
+    """The confound this measurement exists to beat: a long fade is not a room."""
+    faded = synth.with_slow_release(synth.legato_melody(semitones=SCALE), 1.2)
+    room = spectral.analyze_samples(faded, synth.SR).room_quality
+    assert room.treated

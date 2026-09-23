@@ -84,9 +84,16 @@ class NoiseFloor(BaseModel):
 
 
 class RoomQuality(BaseModel):
-    reverb_tail_ms: float
+    reverb_tail_ms: float = Field(
+        description="Estimated RT60 in ms: how long the room takes to fall 60 dB"
+    )
     treated: bool
     reflection_level: float = Field(description="0-1, higher means a more live room")
+    measurement: str = Field(
+        default="none",
+        description="How RT60 was measured: 'note transitions', 'phrase ends' or 'none'",
+    )
+    probes: int = Field(default=0, description="How many decays the estimate rests on")
 
 
 class PitchStability(BaseModel):

@@ -112,10 +112,32 @@ PITCH_CORRECTION_CENTS = 20.0
 NOTE_STEP_CENTS = 60.0
 NOTE_SETTLE_FRAMES = 6
 
-ROOM_TREATED_MS = 180.0
-#: Which decay in the take stands for the room. The fastest few are noise; the slow
-#: ones are the singer's own releases.
+#: RT60 below which a room counts as treated. This one is acoustics rather than corpus
+#: statistics: treated vocal booths sit around 0.2-0.3 s, untreated bedrooms 0.4-0.6 s,
+#: and anything past a second is a live space. The corpora could not set it — no corpus
+#: separates a singer's release from a room — which is what the note-transition
+#: measurement below exists to fix.
+ROOM_TREATED_MS = 350.0
+#: Fallback only: which phrase-end decay stands for the room when the take offers no
+#: note changes to measure. Slow decays there are the singer's releases, so a low
+#: percentile rather than the middle.
 ROOM_DECAY_PERCENTILE = 20.0
+#: Finer STFT for decay measurement: 5.8 ms per frame, 21.5 Hz per bin — fine enough to
+#: follow a decay and to resolve separate harmonics of a sung note.
+ROOM_N_FFT = 2048
+ROOM_HOP = 256
+#: A transition's old harmonic is only used when it sits clear of every harmonic of the
+#: new note, in both musical distance and bins, so the new note cannot leak into it.
+ORPHAN_MIN_CENTS = 150.0
+ORPHAN_MIN_BINS = 3
+ORPHAN_BAND = (250.0, 4000.0)
+#: ISO 3382 evaluates a decay from 5 dB below the start, down to 25 dB below (T20).
+DECAY_START_DB = 5.0
+DECAY_END_DB = 25.0
+MIN_DECAY_RANGE_DB = 10.0
+MIN_DECAY_FIT_R2 = 0.8
+#: Fewer transition probes than this and the phrase-end fallback is used instead.
+MIN_TRANSITION_PROBES = 2
 #: Part of each decay to ignore: the singer's own release at the top, the noise at the
 #: bottom. Frames near the floor read high and flatten the fitted decay, but raising
 #: this leaves a very live room — where the gaps never get far above the floor — with
@@ -167,7 +189,7 @@ def analyze_samples(y: np.ndarray, sr: int) -> SpectralFeatures:
         frequency_bands=_band_scores(spec[:, active], freqs, bandwidth_hz),
         dynamic_range=_dynamic_range(y, frame_db, active),
         noise_floor=_noise_floor(spec, freqs, frame_db, active),
-        room_quality=_room_quality(frame_db, sr),
+        room_quality=_room_quality(y, sr, frame_db, f0, voiced),
         pitch_stability=_pitch_stability(f0, voiced, sr),
         sibilance=_sibilance(spec[:, active], freqs),
     )
@@ -350,25 +372,147 @@ def _spectral_flatness(spectrum: np.ndarray) -> float:
     return float(geo / arith)
 
 
-def _room_quality(frame_db: np.ndarray, sr: int) -> RoomQuality:
-    """Estimate the room from the fastest decay in the take, not the average one.
+def _room_quality(
+    y: np.ndarray, sr: int, frame_db: np.ndarray, f0: np.ndarray, voiced: np.ndarray
+) -> RoomQuality:
+    """Estimate the room's RT60, preferring note transitions over phrase ends.
 
-    A falling envelope is ambiguous — it is equally the room ringing and a singer
-    releasing a long note — and voicing cannot separate them, because reverb is the
-    voice's own harmonics and pitch trackers hear it as voiced. Taking the median of
-    every decay made sustained studio takes measure as more reverberant than bedroom
-    recordings.
+    A falling envelope is ambiguous: it is equally a room ringing and a singer letting a
+    note go, and no statistic of the envelope separates them. Note changes do. A voice
+    sounds one pitch at a time, so when the singer moves to a new note the old note's
+    harmonics stop being driven at once, however slowly the singer's level falls.
+    Whatever is still sounding at those frequencies is the room. That is the
+    interrupted-source measurement of ISO 3382 — excite the room with a steady tone, cut
+    it, time the decay — which a singer performs for free at every change of note.
 
-    What is not ambiguous: the room sets a floor on how fast sound can disappear. A
-    singer can stop dead, a room cannot, so the quickest decays in a take are the ones
-    the room shaped and the slow ones are the singer. Hence a low percentile rather
-    than the middle.
+    A take with too few note changes (a monotone delivery, a single held note) falls
+    back to the fastest phrase-end decays, and says so.
+    """
+    probes = _transition_rt60s(y, sr, f0, voiced)
+    if len(probes) >= MIN_TRANSITION_PROBES:
+        rt60_ms, measurement = float(np.median(probes)) * 1000.0, "note transitions"
+    else:
+        fallback = _phrase_end_rt60s(frame_db, sr)
+        if fallback:
+            rt60_ms = float(np.percentile(fallback, ROOM_DECAY_PERCENTILE)) * 1000.0
+            measurement, probes = "phrase ends", fallback
+        else:
+            rt60_ms, measurement, probes = 0.0, "none", []
+
+    rt60_ms = min(rt60_ms, 5000.0)
+    return RoomQuality(
+        reverb_tail_ms=rt60_ms,
+        treated=bool(rt60_ms < ROOM_TREATED_MS),
+        reflection_level=float(np.clip((rt60_ms - 200.0) / 700.0, 0.0, 1.0)),
+        measurement=measurement,
+        probes=len(probes),
+    )
+
+
+def _note_events(f0: np.ndarray, voiced: np.ndarray, sr: int) -> list[tuple[int, int, float]]:
+    """Every sung note as (start frame, stop frame, pitch in Hz), on the pitch-track grid."""
+    valid = np.isfinite(f0) & voiced
+    cents = np.full(f0.shape, np.nan)
+    cents[valid] = 1200.0 * np.log2(f0[valid] / PITCH_FMIN)
+
+    events: list[tuple[int, int, float]] = []
+    for run_start, run_stop in _voiced_runs(valid, minimum=_frames_for(0.2, sr) + 2):
+        for start, stop in _notes(cents[run_start:run_stop], sr):
+            pitch = float(np.median(f0[run_start + start : run_start + stop]))
+            events.append((run_start + start, run_start + stop, pitch))
+    return events
+
+
+def _orphaned_bins(old_hz: float, new_hz: float, freqs: np.ndarray) -> np.ndarray:
+    """Bins at the old note's harmonics that no harmonic of the new note comes near."""
+    bin_hz = freqs[1] - freqs[0]
+    new_harmonics = new_hz * np.arange(1, int(ORPHAN_BAND[1] * 1.2 / new_hz) + 2)
+    mask = np.zeros(freqs.size, dtype=bool)
+
+    for k in range(1, int(ORPHAN_BAND[1] / old_hz) + 1):
+        harmonic = k * old_hz
+        if harmonic < ORPHAN_BAND[0]:
+            continue
+        cents_away = np.min(np.abs(1200.0 * np.log2(harmonic / new_harmonics)))
+        bins_away = np.min(np.abs(harmonic - new_harmonics)) / bin_hz
+        if cents_away < ORPHAN_MIN_CENTS or bins_away < ORPHAN_MIN_BINS:
+            continue
+        # A band of roughly +-50 cents, so vibrato on the old note stays inside it.
+        mask |= np.abs(freqs - harmonic) <= max(bin_hz, 0.03 * harmonic)
+    return mask
+
+
+def _transition_rt60s(y: np.ndarray, sr: int, f0: np.ndarray, voiced: np.ndarray) -> list[float]:
+    """RT60 in seconds from each legato note change that gives a clean decay."""
+    events = _note_events(f0, voiced, sr)
+    if len(events) < 2:
+        return []
+
+    power = np.abs(librosa.stft(y, n_fft=ROOM_N_FFT, hop_length=ROOM_HOP)) ** 2
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=ROOM_N_FFT)
+    background = np.percentile(power, 10, axis=1)
+    per_track_frame = HOP_LENGTH // ROOM_HOP
+    frame_s = ROOM_HOP / sr
+
+    estimates: list[float] = []
+    for (_, old_stop, old_hz), (new_start, new_stop, new_hz) in zip(events, events[1:]):
+        # Only a change straight into the next note: across a gap the voice may simply
+        # be releasing, which is exactly the ambiguity this measurement avoids.
+        if new_start - old_stop > 2:
+            continue
+        bins = _orphaned_bins(old_hz, new_hz, freqs)
+        if not bins.any():
+            continue
+
+        # Background energy subtracted, as ISO 3382 does for an interrupted source.
+        envelope = np.maximum(power[bins].sum(axis=0) - background[bins].sum(), _EPS)
+        cut = new_start * per_track_frame
+        stop = min(new_stop * per_track_frame, envelope.size)
+        if cut < 12 or stop - cut < 8:
+            continue
+
+        before = 10.0 * np.log10(np.median(envelope[cut - 12 : cut]))
+        decay = 10.0 * np.log10(envelope[cut:stop]) - before
+        estimate = _fit_decay(decay, frame_s)
+        if estimate is not None:
+            estimates.append(estimate)
+    return estimates
+
+
+def _fit_decay(decay_db: np.ndarray, frame_s: float) -> float | None:
+    """RT60 from a decay curve in dB relative to its start, or None if it is not clean."""
+    below_start = np.flatnonzero(decay_db <= -DECAY_START_DB)
+    if below_start.size == 0:
+        return None
+    first = below_start[0]
+    below_end = np.flatnonzero(decay_db[first:] <= -DECAY_END_DB)
+    last = first + (below_end[0] + 1 if below_end.size else decay_db.size - first)
+
+    levels = decay_db[first:last]
+    if levels.size < 4 or levels[0] - levels.min() < MIN_DECAY_RANGE_DB:
+        return None
+
+    times = np.arange(levels.size) * frame_s
+    slope, intercept = np.polyfit(times, levels, 1)
+    residual = levels - (slope * times + intercept)
+    spread = np.sum((levels - levels.mean()) ** 2)
+    r2 = 1.0 - np.sum(residual**2) / spread if spread > 0 else 0.0
+    if slope >= -1.0 or r2 < MIN_DECAY_FIT_R2:
+        return None
+    return -60.0 / slope
+
+
+def _phrase_end_rt60s(frame_db: np.ndarray, sr: int) -> list[float]:
+    """Fallback: RT60 in seconds from each phrase-end decay.
+
+    Contaminated by the singer's releases, which only ever make a decay look slower,
+    so the caller takes a low percentile of these rather than the middle.
     """
     frame_s = HOP_LENGTH / sr
     max_frames = int(1.5 / frame_s)
     floor = float(np.percentile(frame_db, 5))
 
-    tails: list[float] = []
+    estimates: list[float] = []
     for start in _decay_starts(frame_db):
         decay = _decay_segment(frame_db, start, max_frames)
         usable = decay >= floor + FLOOR_MARGIN_DB
@@ -376,19 +520,11 @@ def _room_quality(frame_db: np.ndarray, sr: int) -> RoomQuality:
         levels = decay[usable]
         if levels.size < 3 or levels[0] - levels[-1] < 3.0:
             continue
-        # Fit the decay slope and extrapolate it to a 20 dB drop (a T20 estimate).
         slope_db_per_s = np.polyfit(times, levels, 1)[0]
         if slope_db_per_s >= -1.0:
             continue
-        tails.append(min(20.0 / -slope_db_per_s * 1000.0, 3000.0))
-
-    tail_ms = float(np.percentile(tails, ROOM_DECAY_PERCENTILE)) if tails else 0.0
-    reflection = float(np.clip((tail_ms - 100.0) / 500.0, 0.0, 1.0))
-    return RoomQuality(
-        reverb_tail_ms=tail_ms,
-        treated=bool(tail_ms < ROOM_TREATED_MS),
-        reflection_level=reflection,
-    )
+        estimates.append(60.0 / -slope_db_per_s)
+    return estimates
 
 
 def _decay_segment(frame_db: np.ndarray, start: int, max_frames: int) -> np.ndarray:
