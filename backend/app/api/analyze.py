@@ -34,6 +34,7 @@ async def analyze(
     file: UploadFile = File(...),
     genre: str | None = Form(default=None),
     use_llm: bool = Form(default=True),
+    separate: bool = Form(default=True),
 ) -> dict:
     """Analyse an uploaded recording and build a chain for each tier."""
     suffix = Path(file.filename or "").suffix.lower()
@@ -48,7 +49,9 @@ async def analyze(
         await _save(file, Path(scratch.name))
 
         try:
-            profile = analyze_file(scratch.name, genre=genre, use_llm=use_llm)
+            profile = analyze_file(
+                scratch.name, genre=genre, use_llm=use_llm, separate=separate
+            )
         except spectral.AudioTooShortError as exc:
             raise ApiError(str(exc), status_code=422) from exc
         except Exception as exc:  # librosa raises a wide range on malformed audio

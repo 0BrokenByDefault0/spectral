@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import ssl
 import struct
 import sys
+import time
+import urllib.error
 import urllib.request
 import zlib
 from dataclasses import dataclass
@@ -26,6 +29,9 @@ from pathlib import Path
 TIMEOUT = 120
 #: The central directory lives at the end; this much tail is plenty to find it.
 TAIL_BYTES = 128 * 1024
+#: A fetch is dozens of sequential range requests, so a transient reset partway through
+#: is expected rather than exceptional.
+ATTEMPTS = 4
 
 
 @dataclass
@@ -37,18 +43,41 @@ class Member:
     local_offset: int
 
 
+def _retrying(what: str, call):
+    """Run `call`, retrying transient transport failures with a growing backoff."""
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            return call()
+        except (urllib.error.URLError, TimeoutError, ConnectionError, ssl.SSLError) as exc:
+            if attempt == ATTEMPTS:
+                raise
+            delay = 2**attempt
+            print(f"  {what} failed ({exc}); retrying in {delay}s", file=sys.stderr, flush=True)
+            time.sleep(delay)
+    raise RuntimeError("unreachable")
+
+
 def _get(url: str, start: int, end: int) -> bytes:
-    request = urllib.request.Request(url, headers={"Range": f"bytes={start}-{end}"})
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-        if response.status != 206:
-            raise RuntimeError("the server ignored the range request")
-        return response.read()
+    def once() -> bytes:
+        request = urllib.request.Request(url, headers={"Range": f"bytes={start}-{end}"})
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            if response.status != 206:
+                raise RuntimeError("the server ignored the range request")
+            data = response.read()
+        if len(data) != end - start + 1:
+            raise ConnectionError(f"short read: {len(data)} of {end - start + 1} bytes")
+        return data
+
+    return _retrying(f"range {start}-{end}", once)
 
 
 def _size(url: str) -> int:
-    request = urllib.request.Request(url, method="HEAD")
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-        return int(response.headers["Content-Length"])
+    def once() -> int:
+        request = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            return int(response.headers["Content-Length"])
+
+    return _retrying("size", once)
 
 
 def read_directory(url: str) -> list[Member]:

@@ -33,6 +33,11 @@ def main(argv: list[str] | None = None) -> int:
         choices=[tier.value for tier in Tier],
         help="Only build the chain for this tier (default: all three)",
     )
+    parser.add_argument(
+        "--no-separate",
+        action="store_true",
+        help="Analyse a full mix as-is instead of isolating the vocal first",
+    )
     parser.add_argument("--no-chains", action="store_true", help="Analysis only, no chains")
     parser.add_argument("--json", type=Path, help="Also write the full result as JSON here")
     args = parser.parse_args(argv)
@@ -42,7 +47,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        profile = analyze_file(args.audio, genre=args.genre, use_llm=not args.no_llm)
+        profile = analyze_file(
+            args.audio,
+            genre=args.genre,
+            use_llm=not args.no_llm,
+            separate=not args.no_separate,
+        )
     except spectral.AudioTooShortError as exc:
         print(f"cannot analyse: {exc}", file=sys.stderr)
         return 1

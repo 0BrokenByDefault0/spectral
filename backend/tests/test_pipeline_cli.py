@@ -41,7 +41,11 @@ def test_pipeline_notes_a_missing_api_key(tmp_path, monkeypatch):
 
 
 def test_pipeline_flags_a_full_mix(tmp_path):
-    profile = analyze_file(write(tmp_path, synth.full_mix()), use_llm=False)
+    # separate=False keeps Demucs out of the test suite: a real separation is minutes of
+    # CPU, and what is being checked here is the detection and the note it produces.
+    profile = analyze_file(
+        write(tmp_path, synth.full_mix()), use_llm=False, separate=False
+    )
     assert profile.source.source_type is SourceType.FULL_MIX
     assert any("full mix" in note for note in profile.analysis_notes)
 

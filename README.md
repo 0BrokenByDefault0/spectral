@@ -3,10 +3,10 @@
 Analyses a vocal recording and recommends plugin chains at three price tiers.
 See `CLAUDE.md` for the architecture and the build order.
 
-**Status: Phases 1-2 done, plus the HTTP API.** The analysis pipeline (detection,
+**Status: Phases 1-4 in place.** The analysis pipeline (detection, separation,
 spectral measurement, LLM listening pass, merge), the recommendation engine
-(74-plugin catalog, three tiered signal chains) and `POST /analyze` are in place.
-The web UI and source separation are Phases 3-4.
+(74-plugin catalog, three tiered signal chains), `POST /analyze` and the web UI are
+all built. What remains is calibration (below) and Phase 5 polish.
 
 ## Setup
 
@@ -50,6 +50,13 @@ Every response uses the same envelope, errors included:
 { "status": "error", "message": "..." }
 ```
 
+Separation runs only when the upload is detected as a full mix, since separating a dry
+vocal degrades a clean signal for nothing. It is slow — roughly real time per minute of
+audio on CPU — so a mix uploaded through the API holds the request open for minutes;
+`separate=false` turns it off. However it goes (off, unavailable, failed, succeeded) the
+profile's notes say which audio was actually measured, and a failed separation falls
+back to analysing the mix rather than failing the request.
+
 Uploads are refused for an unsupported extension (415), a file over 60 MB (413), and
 audio that is empty, unreadable or under a second (422). If the plugin database is
 missing, the analysis still returns and the chains come back empty with a note saying
@@ -60,6 +67,7 @@ why. `GET /health` and `GET /tiers` round it out.
 | Step | Module | Output |
 | --- | --- | --- |
 | Classify the upload | `analysis/detector.py` | dry vocal vs full mix, with reasons |
+| Isolate the vocal | `separation/demucs_runner.py` | vocal stem, but only for a full mix |
 | Measure the signal | `analysis/spectral.py` | band balance, dynamics, noise, room, pitch, sibilance |
 | Listen to it | `analysis/qualitative.py` | Gemini 2.5 Pro's structured assessment |
 | Reconcile the two | `analysis/merger.py` | `VocalProfile` with issues and confidence scores |
