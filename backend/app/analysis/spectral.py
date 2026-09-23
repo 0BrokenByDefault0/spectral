@@ -83,6 +83,8 @@ HUM_PROMINENCE_DB = 8.0
 
 PITCH_FMIN = 65.0
 PITCH_FMAX = 1000.0
+#: Within-note drift worth correcting. Professional takes measure a 7-cent median and
+#: 25 at the 99th percentile, so this sits between their p90 and p99.
 PITCH_CORRECTION_CENTS = 20.0
 #: A pitch change this big, held for this many frames, is a new note rather than
 #: vibrato. Six frames is about 140 ms — longer than a vibrato cycle can stay on one
@@ -94,7 +96,10 @@ ROOM_TREATED_MS = 180.0
 #: Which decay in the take stands for the room. The fastest few are noise; the slow
 #: ones are the singer's own releases.
 ROOM_DECAY_PERCENTILE = 20.0
-#: Part of each decay to ignore: the singer's own release at the top, the noise at the bottom.
+#: Part of each decay to ignore: the singer's own release at the top, the noise at the
+#: bottom. Frames near the floor read high and flatten the fitted decay, but raising
+#: this leaves a very live room — where the gaps never get far above the floor — with
+#: too few points to fit at all, which is the case that most needs measuring.
 RELEASE_SKIP_DB = 5.0
 FLOOR_MARGIN_DB = 5.0
 

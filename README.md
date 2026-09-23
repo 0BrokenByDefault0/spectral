@@ -168,23 +168,40 @@ manifest are.
 
 ## Calibration status
 
-The reference constants in `spectral.py` (`REFERENCE_BALANCE`, the severity
-thresholds, `SIBILANCE_MODERATE`, `ROOM_TREATED_MS`, `PITCH_CORRECTION_CENTS`) are
-still first-pass values checked only against synthetic signals. The corpus work above
-is how they get replaced, and the first measurements already show the band references
-are far off — real solo vocals sit roughly 8-10 dB below the current `presence` and
-`air` figures, so almost every honest take would be told it lacks both.
+428 recordings measured across the four corpora. What that run settled, and what it
+did not:
 
-The cause is conceptual as much as numerical: those figures describe a *mixed* vocal
-while the input is a *raw take*, which guarantees the deficit. The corpus median of
-good studio takes replaces them.
+**Validated and applied.** Within-note pitch drift measures a 7-cent median across 300
+professional takes, p99 of 25 — so `PITCH_CORRECTION_CENTS` at 20 sits between their
+p90 and p99, which is where a "worth correcting" threshold belongs. Before the note
+segmentation fix the same corpus measured a 201-cent median, because the metric was
+scoring melody.
 
-Two things remain open:
+The detector was retuned against labelled vocals and mixes: it now identifies 82% of
+full mixes while reading 97% of vocals correctly, against 55%/99% before. Sub-bass
+energy turned out to be a far stronger signal than the rest — solo vocals reach 0.8%
+below 100 Hz at the 95th percentile — so it now decides on its own at 3%, which the
+original design deliberately avoided. The measurement beat the prior.
 
-- **Nothing here is validated by ear.** A corpus says what is typical, not what is
-  good; if a corpus shares a flaw, the constants inherit it. Phase 1's validation gate
-  — a handful of real takes where somebody confirms the advice is what they would have
-  said — is still the check that matters, and has not been done.
-- **The corpora are sung, mostly Western, and mostly solo.** Rap, screamed and spoken
-  delivery are thin on the ground in all of them, so the reference is weakest exactly
-  where the product's likely users sit.
+**Measured, not applied.** VocalSet is vocal *exercises* — sustained vowels, scales,
+arpeggios, no consonants — so its band balance and sibilance figures describe held
+vowels rather than singing. Its proposed `REFERENCE_BALANCE` would put `air` at 0.0003
+and `SIBILANCE_MODERATE` at 0.002, which are properties of the corpus, not of a good
+take. Those constants are unchanged and still uncalibrated.
+
+**Still unresolved: the room.** The fastest-decay fix moved the numbers the right way
+(VocalSet 292 → 219 ms, vocadito 141 → 95 ms) but the ordering across corpora is still
+driven by content, not by room: a take of sustained notes offers no abrupt stop for the
+measurement to find. Raising the noise-floor margin to compensate was tried and
+reverted — it leaves a very live room, where the gaps never rise far above the floor,
+with too few points to fit at all.
+
+The right experiment is ground truth rather than another corpus: convolve dry takes
+with impulse responses of published RT60 and check the measured tail tracks the known
+value. That is the next piece of work on this metric.
+
+**Two things a corpus cannot settle.** It says what is typical, not what is good — if
+the corpus shares a flaw, the constants inherit it. And all four corpora are sung,
+mostly Western and mostly solo; rap, screamed and spoken delivery are thin in all of
+them, so the reference is weakest where the likely users are. A handful of real takes
+with a one-line verdict each remains the check that matters.

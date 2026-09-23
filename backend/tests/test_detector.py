@@ -36,3 +36,22 @@ def test_reasons_describe_the_verdict():
 def test_silence_does_not_crash():
     result = detector.detect_samples(np.zeros(2 * synth.SR, dtype=np.float32), synth.SR)
     assert result.source_type is SourceType.DRY_VOCAL
+
+
+def test_sub_bass_alone_identifies_a_mix():
+    """Measured over 428 labelled files, 3% sub-bass is past anything a vocal carries.
+
+    A bass-light mix still has the other two votes to fall back on, so this is a floor
+    on detection, not the only route to it.
+    """
+    quiet_drums = synth.full_mix()
+    result = detector.detect_samples(quiet_drums, synth.SR)
+    assert result.sub_bass_ratio > detector.SUB_BASS_MIX
+    assert result.source_type is SourceType.FULL_MIX
+
+
+def test_consonant_heavy_vocals_are_not_mistaken_for_mixes():
+    """Consonants read as percussive, so that threshold has to sit above a vocal's."""
+    sibilant = synth.with_sibilance(synth.vocal(), level=1.0)
+    result = detector.detect_samples(sibilant, synth.SR)
+    assert result.source_type is SourceType.DRY_VOCAL
