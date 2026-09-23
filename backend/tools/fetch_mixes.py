@@ -123,6 +123,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--count", type=int, default=40, help="Tracks to collect in total")
     parser.add_argument(
+        "--query",
+        action="append",
+        help="Search query to use instead of the built-in genre spread; repeatable",
+    )
+    parser.add_argument(
         "--scan", type=int, default=400, help="Search results to scan per genre query"
     )
     parser.add_argument(
@@ -132,11 +137,12 @@ def main(argv: list[str] | None = None) -> int:
 
     args.out.mkdir(parents=True, exist_ok=True)
     manifest_path = args.manifest or args.out / "manifest.json"
-    per_query = max(2, args.count // len(QUERIES) + 1)
+    queries = tuple(args.query) if args.query else QUERIES
+    per_query = max(2, args.count // len(queries) + 1)
 
     collected: list[dict] = []
     seen: set[str] = set()
-    for query in QUERIES:
+    for query in queries:
         if len(collected) >= args.count:
             break
         print(f"searching: {query}")
