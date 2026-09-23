@@ -64,6 +64,64 @@ def vocal(
     return _normalize(signal, 0.5)
 
 
+def melody(
+    semitones: tuple[int, ...] = (0, 2, 4, 5, 7, 5, 4, 2),
+    note_s: float = 0.6,
+    sr: int = SR,
+    f0: float = 180.0,
+    per_note_drift_cents: float = 0.0,
+    **kwargs,
+) -> np.ndarray:
+    """A sung phrase that changes note, the way actual singing does.
+
+    Melody is not drift: a take that moves cleanly between notes should measure as in
+    tune. `per_note_drift_cents` slides each note off its centre for the case that is.
+    """
+    notes = []
+    for step in semitones:
+        note = vocal(
+            duration_s=note_s,
+            sr=sr,
+            f0=f0 * 2 ** (step / 12.0),
+            drift_cents=per_note_drift_cents,
+            **kwargs,
+        )
+        notes.append(note)
+    return _normalize(np.concatenate(notes), 0.5)
+
+
+def legato_melody(
+    semitones: tuple[int, ...] = (0, 2, 4, 5, 7, 5, 4, 2),
+    note_s: float = 0.6,
+    sr: int = SR,
+    f0: float = 180.0,
+    per_note_drift_cents: float = 0.0,
+    tilt: float = 0.8,
+) -> np.ndarray:
+    """A melody sung as one unbroken tone, with no silence between the notes.
+
+    Voicing alone cannot separate these notes, so this is what exercises the pitch
+    segmentation: the analysis has to split on the pitch steps themselves.
+    """
+    n = int(len(semitones) * note_s * sr)
+    contour = np.zeros(n)
+    for index, step in enumerate(semitones):
+        low, high = int(index * note_s * sr), int((index + 1) * note_s * sr)
+        slide = np.linspace(0.0, 1.0, high - low)
+        contour[low:high] = step * 100.0 + per_note_drift_cents * slide
+
+    freq = f0 * 2 ** (contour / 1200.0)
+    phase = 2 * np.pi * np.cumsum(freq) / sr
+    signal = np.zeros(n)
+    for k in range(1, int(sr / 2 / f0) + 1):
+        signal += _formant_gain(f0 * k) * np.sin(k * phase) / k**tilt
+
+    fade = int(0.01 * sr)
+    signal[:fade] *= np.linspace(0.0, 1.0, fade)
+    signal[-fade:] *= np.linspace(1.0, 0.0, fade)
+    return _normalize(signal, 0.5)
+
+
 #: Rough vowel formants (centre Hz, width Hz, gain) — enough to shape the harmonic series.
 _FORMANTS = ((500.0, 300.0, 2.0), (1500.0, 500.0, 1.0), (2800.0, 800.0, 0.7))
 
@@ -125,6 +183,18 @@ def with_reverb(
     impulse[0] = 1.0
     wet_signal = np.convolve(y, impulse, mode="full")[: y.size]
     return _normalize(y + wet * _normalize(wet_signal, 1.0), 0.5)
+
+
+def with_slow_release(y: np.ndarray, release_s: float = 0.8, sr: int = SR) -> np.ndarray:
+    """Fade the end of the take out slowly, the way a singer holds and releases a note.
+
+    This decays like a reverberant room but is entirely the source, which is what the
+    room measurement has to avoid being fooled by.
+    """
+    faded = y.copy()
+    release = min(int(release_s * sr), y.size)
+    faded[-release:] *= np.linspace(1.0, 0.0, release) ** 2
+    return _normalize(faded, 0.5)
 
 
 def with_dynamics(y: np.ndarray, spread_db: float = 20.0, sr: int = SR) -> np.ndarray:

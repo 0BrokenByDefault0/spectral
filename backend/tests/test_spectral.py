@@ -141,3 +141,49 @@ def test_a_gentle_rolloff_is_not_a_cutoff(clean):
     )
     assert dark.bandwidth_hz > spectral.BAND_LIMIT_HZ
     assert dark.frequency_bands["air"].scored
+
+
+def test_melody_is_not_drift():
+    """Moving between notes is singing, not a tuning problem."""
+    steady = spectral.analyze_samples(synth.melody(), synth.SR)
+    assert steady.pitch_stability.drift_cents < 10.0
+    assert not steady.pitch_stability.needs_correction
+
+
+def test_wide_intervals_are_not_drift():
+    octaves = spectral.analyze_samples(synth.melody(semitones=(0, 7, 12, 7, 0)), synth.SR)
+    assert octaves.pitch_stability.drift_cents < 10.0
+
+
+def test_legato_notes_are_split_on_pitch_not_silence():
+    """With no gaps between notes, only pitch segmentation can separate them."""
+    legato = spectral.analyze_samples(synth.legato_melody(), synth.SR)
+    assert legato.pitch_stability.voiced_ratio > 0.9
+    assert legato.pitch_stability.drift_cents < 10.0
+
+
+def test_notes_that_slide_off_centre_are_drift():
+    drifting = spectral.analyze_samples(
+        synth.melody(per_note_drift_cents=140.0, vibrato_cents=0.0), synth.SR
+    )
+    assert drifting.pitch_stability.drift_cents > 15.0
+    assert drifting.pitch_stability.needs_correction
+
+
+def test_deep_vibrato_is_not_drift():
+    wide = spectral.analyze_samples(synth.vocal(vibrato_cents=80.0), synth.SR)
+    assert wide.pitch_stability.drift_cents < 10.0
+
+
+def test_a_slow_vocal_release_is_not_a_room(clean):
+    """A held note fading out decays like a room, and is not one."""
+    released = spectral.analyze_samples(synth.with_slow_release(clean, 0.8), synth.SR)
+    assert released.room_quality.treated
+    assert released.room_quality.reverb_tail_ms < spectral.ROOM_TREATED_MS
+
+
+def test_a_live_room_still_reads_as_live(clean):
+    wet = spectral.analyze_samples(synth.with_reverb(clean, tail_s=1.2, wet=0.7), synth.SR)
+    released = spectral.analyze_samples(synth.with_slow_release(clean, 0.8), synth.SR)
+    assert wet.room_quality.reverb_tail_ms > released.room_quality.reverb_tail_ms * 3
+    assert not wet.room_quality.treated

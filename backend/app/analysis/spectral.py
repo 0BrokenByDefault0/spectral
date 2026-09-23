@@ -84,8 +84,16 @@ HUM_PROMINENCE_DB = 8.0
 PITCH_FMIN = 65.0
 PITCH_FMAX = 1000.0
 PITCH_CORRECTION_CENTS = 20.0
+#: A pitch change this big, held for this many frames, is a new note rather than
+#: vibrato. Six frames is about 140 ms — longer than a vibrato cycle can stay on one
+#: side of its centre, so deep vibrato does not get chopped into notes.
+NOTE_STEP_CENTS = 60.0
+NOTE_SETTLE_FRAMES = 6
 
 ROOM_TREATED_MS = 180.0
+#: Which decay in the take stands for the room. The fastest few are noise; the slow
+#: ones are the singer's own releases.
+ROOM_DECAY_PERCENTILE = 20.0
 #: Part of each decay to ignore: the singer's own release at the top, the noise at the bottom.
 RELEASE_SKIP_DB = 5.0
 FLOOR_MARGIN_DB = 5.0
@@ -121,6 +129,12 @@ def analyze_samples(y: np.ndarray, sr: int) -> SpectralFeatures:
     active = _active_frames(frame_db)
 
     bandwidth_hz = _bandwidth_hz(spec[:, active], freqs)
+    # Pitch tracking is the expensive pass and both pitch and room analysis need its
+    # voicing decisions, so it runs once here.
+    f0, voiced, _ = librosa.pyin(
+        y, fmin=PITCH_FMIN, fmax=PITCH_FMAX, sr=sr, frame_length=N_FFT, hop_length=HOP_LENGTH
+    )
+
     return SpectralFeatures(
         duration_s=float(y.size / sr),
         sample_rate=sr,
@@ -129,7 +143,7 @@ def analyze_samples(y: np.ndarray, sr: int) -> SpectralFeatures:
         dynamic_range=_dynamic_range(y, frame_db, active),
         noise_floor=_noise_floor(spec, freqs, frame_db, active),
         room_quality=_room_quality(frame_db, sr),
-        pitch_stability=_pitch_stability(y, sr),
+        pitch_stability=_pitch_stability(f0, voiced, sr),
         sibilance=_sibilance(spec[:, active], freqs),
     )
 
@@ -311,23 +325,27 @@ def _spectral_flatness(spectrum: np.ndarray) -> float:
 
 
 def _room_quality(frame_db: np.ndarray, sr: int) -> RoomQuality:
-    """Estimate a reverb tail from how fast the envelope decays after peaks."""
+    """Estimate the room from the fastest decay in the take, not the average one.
+
+    A falling envelope is ambiguous — it is equally the room ringing and a singer
+    releasing a long note — and voicing cannot separate them, because reverb is the
+    voice's own harmonics and pitch trackers hear it as voiced. Taking the median of
+    every decay made sustained studio takes measure as more reverberant than bedroom
+    recordings.
+
+    What is not ambiguous: the room sets a floor on how fast sound can disappear. A
+    singer can stop dead, a room cannot, so the quickest decays in a take are the ones
+    the room shaped and the slow ones are the singer. Hence a low percentile rather
+    than the middle.
+    """
     frame_s = HOP_LENGTH / sr
     max_frames = int(1.5 / frame_s)
-
     floor = float(np.percentile(frame_db, 5))
 
     tails: list[float] = []
     for start in _decay_starts(frame_db):
         decay = _decay_segment(frame_db, start, max_frames)
-        # Ignore the note's own release at the top and the noise floor at the bottom:
-        # the room is what is left in between.
-        above_floor = decay >= floor + FLOOR_MARGIN_DB
-        usable = above_floor & (decay <= decay[0] - RELEASE_SKIP_DB)
-        if usable.sum() < 3:
-            # A very live room never gets far below the note before the next phrase;
-            # fit what is there rather than reporting no tail at all.
-            usable = above_floor
+        usable = decay >= floor + FLOOR_MARGIN_DB
         times = np.arange(decay.size)[usable] * frame_s
         levels = decay[usable]
         if levels.size < 3 or levels[0] - levels[-1] < 3.0:
@@ -338,7 +356,7 @@ def _room_quality(frame_db: np.ndarray, sr: int) -> RoomQuality:
             continue
         tails.append(min(20.0 / -slope_db_per_s * 1000.0, 3000.0))
 
-    tail_ms = float(np.median(tails)) if tails else 0.0
+    tail_ms = float(np.percentile(tails, ROOM_DECAY_PERCENTILE)) if tails else 0.0
     reflection = float(np.clip((tail_ms - 100.0) / 500.0, 0.0, 1.0))
     return RoomQuality(
         reverb_tail_ms=tail_ms,
@@ -362,22 +380,19 @@ def _decay_starts(frame_db: np.ndarray) -> list[int]:
     Once a decay is found we skip past it, so one phrase contributes one measurement
     rather than one per frame of its release.
     """
-    loud = frame_db.max() - 20.0
+    loud = frame_db.max() - 25.0
     starts: list[int] = []
-    i = 1
-    while i < len(frame_db) - 2:
-        if frame_db[i] >= loud and frame_db[i + 1] < frame_db[i] - 1.0:
-            starts.append(i)
-            while i < len(frame_db) - 2 and frame_db[i + 1] < frame_db[i]:
-                i += 1
-        i += 1
+    index = 1
+    while index < len(frame_db) - 2:
+        if frame_db[index] >= loud and frame_db[index + 1] < frame_db[index] - 1.0:
+            starts.append(index)
+            while index < len(frame_db) - 2 and frame_db[index + 1] < frame_db[index]:
+                index += 1
+        index += 1
     return starts
 
 
-def _pitch_stability(y: np.ndarray, sr: int) -> PitchStability:
-    f0, voiced, _ = librosa.pyin(
-        y, fmin=PITCH_FMIN, fmax=PITCH_FMAX, sr=sr, frame_length=N_FFT, hop_length=HOP_LENGTH
-    )
+def _pitch_stability(f0: np.ndarray, voiced: np.ndarray, sr: int) -> PitchStability:
     voiced_ratio = float(np.mean(voiced)) if voiced.size else 0.0
     valid = np.isfinite(f0) & voiced
     if valid.sum() < 8:
@@ -408,18 +423,58 @@ def _pitch_stability(y: np.ndarray, sr: int) -> PitchStability:
 
 
 def _drift_cents(cents: np.ndarray, valid: np.ndarray, sr: int) -> float:
-    """How far sustained notes wander from their own centre, vibrato removed.
+    """How far each sustained note wanders from its own centre, vibrato removed.
 
-    Each contiguous voiced run is treated as one note: smooth out vibrato, then measure
-    how far the note strays from its median pitch. A rolling centre cannot be used here —
-    it follows a slow glide exactly and reports no drift at all.
+    A voiced run is a phrase, not a note. Measuring deviation across a whole run scores
+    the melody: any singer moving between notes reads as drift, and a scale reads as
+    hundreds of cents of it. So runs are split at the pitch changes first, and drift is
+    measured only *within* each note.
     """
     smoothing = _frames_for(0.2, sr)
     per_note: list[float] = []
+
     for start, stop in _voiced_runs(valid, minimum=smoothing + 2):
-        note = _moving_average(cents[start:stop], smoothing)
-        per_note.append(float(np.median(np.abs(note - np.median(note)))))
+        for note_start, note_stop in _notes(cents[start:stop], sr):
+            note = _moving_average(cents[start + note_start : start + note_stop], smoothing)
+            if note.size == 0:
+                continue
+            per_note.append(float(np.median(np.abs(note - np.median(note)))))
     return float(np.median(per_note)) if per_note else 0.0
+
+
+def _notes(cents: np.ndarray, sr: int) -> list[tuple[int, int]]:
+    """Split a voiced phrase into notes at the places the pitch steps and stays.
+
+    A step has to hold for `NOTE_SETTLE_FRAMES` to count, so vibrato and the moment of
+    a slide between notes do not each become a note of their own.
+    """
+    minimum = _frames_for(0.15, sr)
+    if cents.size < minimum * 2:
+        return [(0, cents.size)]
+
+    notes: list[tuple[int, int]] = []
+    start = 0
+    centre = float(np.median(cents[:minimum]))
+
+    index = minimum
+    while index < cents.size - NOTE_SETTLE_FRAMES:
+        window = cents[index : index + NOTE_SETTLE_FRAMES]
+        if np.all(np.abs(window - centre) > NOTE_STEP_CENTS):
+            if index - start >= minimum:
+                notes.append((start, index))
+            start = index
+            centre = float(np.median(window))
+            index += NOTE_SETTLE_FRAMES
+            continue
+        # Track the centre as the note goes on, so a singer sliding slowly flat stays
+        # one note and is reported as drift instead of being split into two in-tune
+        # notes. Drift itself is measured against the finished note's median, not this.
+        centre = float(np.median(cents[start : index + 1]))
+        index += 1
+
+    if cents.size - start >= minimum:
+        notes.append((start, cents.size))
+    return notes or [(0, cents.size)]
 
 
 def _voiced_runs(valid: np.ndarray, minimum: int) -> list[tuple[int, int]]:
