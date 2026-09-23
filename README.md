@@ -3,10 +3,10 @@
 Analyses a vocal recording and recommends plugin chains at three price tiers.
 See `CLAUDE.md` for the architecture and the build order.
 
-**Status: Phases 1-2 done.** Backend CLI only, no UI. The analysis pipeline
-(detection, spectral measurement, LLM listening pass, merge) and the
-recommendation engine (74-plugin catalog, three tiered signal chains) are in
-place; the web UI and source separation are Phases 3-4.
+**Status: Phases 1-2 done, plus the HTTP API.** The analysis pipeline (detection,
+spectral measurement, LLM listening pass, merge), the recommendation engine
+(74-plugin catalog, three tiered signal chains) and `POST /analyze` are in place.
+The web UI and source separation are Phases 3-4.
 
 ## Setup
 
@@ -30,6 +30,30 @@ python -m app.cli take.wav --no-chains                   # analysis only
 The CLI prints the detected source type, a frequency-balance readout, the raw
 measurements, the merged issue list and then one signal chain per price tier.
 `--json` writes the whole `AnalysisResult` (profile plus chains).
+
+## API
+
+```bash
+cd backend && uvicorn app.main:app --reload
+curl -F file=@take.wav -F genre=drill -F use_llm=false localhost:8000/analyze
+```
+
+`POST /analyze` takes a multipart upload (`file`, optional `genre`, optional `use_llm`)
+and returns the profile and all three chains. Analysis is synchronous — pitch tracking
+dominates, and a one-minute take takes a few seconds — so the stage-by-stage progress
+the UI shows is driven by the client, not streamed by the server.
+
+Every response uses the same envelope, errors included:
+
+```json
+{ "status": "ok",    "data": { "profile": {...}, "chains": [...] } }
+{ "status": "error", "message": "..." }
+```
+
+Uploads are refused for an unsupported extension (415), a file over 60 MB (413), and
+audio that is empty, unreadable or under a second (422). If the plugin database is
+missing, the analysis still returns and the chains come back empty with a note saying
+why. `GET /health` and `GET /tiers` round it out.
 
 ## What the pipeline does
 

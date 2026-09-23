@@ -183,6 +183,10 @@ class VocalProfile(BaseModel):
     pitch_stability: PitchStability
     sibilance: SibilanceProfile
     issues: list[VocalIssue]
+    scores: dict[str, float] = Field(
+        default_factory=dict,
+        description="0-100 per radar axis; presentation only, nothing decides from it",
+    )
     qualitative_summary: str
     genre: str | None = None
     analysis_notes: list[str] = Field(default_factory=list)

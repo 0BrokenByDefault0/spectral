@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.analysis import scoring
 from app.analysis.spectral import BAND_LIMIT_HZ
 from app.models.schemas import (
     ProcessingCategory,
@@ -71,6 +72,7 @@ def merge(
         pitch_stability=spectral.pitch_stability,
         sibilance=spectral.sibilance,
         issues=issues,
+        scores=scoring.score(spectral),
         qualitative_summary=summary,
         genre=genre,
         analysis_notes=all_notes,
