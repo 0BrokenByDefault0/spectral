@@ -176,40 +176,50 @@ manifest are.
 
 ## Calibration status
 
-428 recordings measured across the four corpora. What that run settled, and what it
-did not:
+The band references, band severity thresholds, sibilance thresholds and dynamics
+thresholds are now measured rather than guessed. They come from **URSing** — 30
+isolated solo vocals from real sung performances, with lyrics and therefore with
+consonants and breath in them.
 
-**Validated and applied.** Within-note pitch drift measures a 7-cent median across 300
-professional takes, p99 of 25 — so `PITCH_CORRECTION_CENTS` at 20 sits between their
-p90 and p99, which is where a "worth correcting" threshold belongs. Before the note
-segmentation fix the same corpus measured a 201-cent median, because the metric was
-scoring melody.
+An earlier attempt used VocalSet, which is professionally recorded but is vocal
+*exercises* on sustained vowels. Its top octave is nearly empty: it would have set the
+`air` reference at 0.0003 and called every real recording 13 dB too bright. URSing
+measures 12.9 dB more air and 10.8 dB more ultra-high than VocalSet — that gap is the
+consonants.
 
-The detector was retuned against labelled vocals and mixes: it now identifies 82% of
-full mixes while reading 97% of vocals correctly, against 55%/99% before. Sub-bass
-energy turned out to be a far stronger signal than the rest — solo vocals reach 0.8%
-below 100 Hz at the 95th percentile — so it now decides on its own at 3%, which the
-original design deliberately avoided. The measurement beat the prior.
+**One global severity threshold turned out to be wrong.** Across good takes the low mids
+hold to 1.8 dB while the top octave swings 8.9 dB, so the same number cannot serve both:
+it is either deaf to mud or deafened by air. `BAND_THRESHOLDS` now carries a
+(moderate, critical) pair per band, taken from each band's own p90 and p99.
 
-**Measured, not applied.** VocalSet is vocal *exercises* — sustained vowels, scales,
-arpeggios, no consonants — so its band balance and sibilance figures describe held
-vowels rather than singing. Its proposed `REFERENCE_BALANCE` would put `air` at 0.0003
-and `SIBILANCE_MODERATE` at 0.002, which are properties of the corpus, not of a good
-take. Those constants are unchanged and still uncalibrated.
+`needs_compression` also changed meaning. The old threshold flagged essentially every
+real recording, which is true — nearly every vocal wants compression — and therefore
+carried no information. It now sits at the p90 of good takes, so it means "uneven even
+for a raw vocal".
 
-**Still unresolved: the room.** The fastest-decay fix moved the numbers the right way
-(VocalSet 292 → 219 ms, vocadito 141 → 95 ms) but the ordering across corpora is still
-driven by content, not by room: a take of sustained notes offers no abrupt stop for the
-measurement to find. Raising the noise-floor margin to compensate was tried and
-reverted — it leaves a very live room, where the gaps never rise far above the floor,
-with too few points to fit at all.
+Run against held-out corpora, the calibrated analysis reports 0.5 issues per take on the
+reference corpus, 1.8 on amateur phone recordings (mostly noise floor, correctly), and
+3.4 on rap vocals separated from finished mixes.
 
-The right experiment is ground truth rather than another corpus: convolve dry takes
-with impulse responses of published RT60 and check the measured tail tracks the known
-value. That is the next piece of work on this metric.
+### What is still open
 
-**Two things a corpus cannot settle.** It says what is typical, not what is good — if
-the corpus shares a flaw, the constants inherit it. And all four corpora are sung,
-mostly Western and mostly solo; rap, screamed and spoken delivery are thin in all of
-them, so the reference is weakest where the likely users are. A handful of real takes
-with a one-line verdict each remains the check that matters.
+**The room.** No corpus settles it, because a decaying envelope is equally a room ringing
+and a singer releasing a note, and reverb is the voice's own harmonics so voicing cannot
+separate them either. The best split found between a studio corpus and a bedroom one was
+57% — chance. The next step is ground truth rather than another corpus: convolve dry
+takes with impulse responses of published RT60 and check the measured tail tracks the
+known value.
+
+**Genre.** The reference is sung. Rap vocals separated from finished mixes read as "thin
+body" against it 6 times in 8, because rap vocals are deliberately high-passed to leave
+room for the low end — a genre difference in mixing, not a fault in the recording. A
+genre-aware reference is the fix; until then the tool will tell rap vocalists their take
+is thin.
+
+**Separated stems.** Separation leaves residue in the gaps, which the noise-floor
+measurement reads as room tone (7 of 8 separated rap stems). The listening pass is told
+the vocal was extracted; the issue list is not.
+
+**Nothing here is validated by ear.** A corpus says what is typical, not what is good. A
+handful of real takes with a one-line verdict each is still the check that matters, and
+for rap it is the only one available — no royalty-free rap vocal corpus exists.

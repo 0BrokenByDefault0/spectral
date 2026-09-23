@@ -34,16 +34,18 @@ def _phrase_envelope(n: int, sr: int, note_s: float = 0.45, gap_s: float = 0.2) 
 def vocal(
     duration_s: float = 6.0,
     sr: int = SR,
-    f0: float = 180.0,
-    tilt: float = 0.8,
+    f0: float = 160.0,
+    tilt: float = 1.0,
     breath: float = 0.02,
     vibrato_cents: float = 20.0,
     drift_cents: float = 0.0,
 ) -> np.ndarray:
     """A harmonic tone with vibrato, phrase envelope and a roughly vocal spectral tilt.
 
-    `tilt` and `breath` are set so the result lands close to the reference balance in
-    `spectral.REFERENCE_BALANCE` — it stands in for a decent, unprocessed take.
+    `f0`, `tilt` and `breath` are set so the result lands inside every band's threshold
+    in `spectral.BAND_THRESHOLDS` — it stands in for a decent, unprocessed take. They
+    were re-fitted when the reference moved to a measured one, since a stand-in for "no
+    problems" is only meaningful against the reference actually in force.
     """
     n = int(duration_s * sr)
     t = np.arange(n) / sr
@@ -147,8 +149,13 @@ def with_lowpass(y: np.ndarray, cutoff_hz: float, sr: int = SR) -> np.ndarray:
     return _normalize(np.fft.irfft(spectrum, n=y.size), 0.5)
 
 
-def with_sibilance(y: np.ndarray, sr: int = SR, level: float = 0.5) -> np.ndarray:
-    """Add filtered noise bursts where the phrases start, like hard esses."""
+def with_sibilance(y: np.ndarray, sr: int = SR, level: float = 1.0) -> np.ndarray:
+    """Add filtered noise bursts where the phrases start, like hard esses.
+
+    The default level clears `spectral.SIBILANCE_MODERATE`, which real recordings put
+    at twice where it was first guessed — so the stand-in for "sibilant" had to move
+    with it.
+    """
     noise = _bandlimited_noise(y.size, sr, 5000.0, 9500.0)
     bursts = np.zeros(y.size)
     step = int(0.65 * sr)

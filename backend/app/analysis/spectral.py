@@ -38,18 +38,34 @@ BANDS: dict[str, tuple[float, float]] = {
     "ultra_high": (10000.0, 16000.0),
 }
 
-#: Share of 60 Hz-16 kHz energy each band carries in a well-balanced vocal.
+#: Share of 60 Hz-16 kHz energy each band carries in a well-recorded vocal. These are
+#: the medians of 30 isolated solo vocals from URSing — sung performances with lyrics,
+#: so with consonants and breath in them. An earlier attempt used a corpus of vocal
+#: exercises on sustained vowels, whose top octave is nearly empty; it would have put
+#: `air` at 0.0003 and called every real recording 13 dB too bright.
 REFERENCE_BALANCE: dict[str, float] = {
-    "low_mid": 0.34,
-    "boxiness": 0.090,
-    "presence": 0.060,
-    "air": 0.012,
-    "ultra_high": 0.004,
+    "low_mid": 0.544,
+    "boxiness": 0.066,
+    "presence": 0.0135,
+    "air": 0.0057,
+    "ultra_high": 0.0005,
 }
 
-#: |deviation| in dB at which a band becomes MODERATE, then CRITICAL.
-BAND_MODERATE_DB = 3.0
-BAND_CRITICAL_DB = 6.0
+#: (MODERATE, CRITICAL) deviation in dB, per band, from how much good takes vary in that
+#: band: the p90 and p99 of each band's own spread around the reference. One global pair
+#: cannot work — between good recordings the low mids hold to 1.8 dB while the top octave
+#: swings 8.9 dB, so a single threshold is either deaf to mud or deafened by air.
+BAND_THRESHOLDS: dict[str, tuple[float, float]] = {
+    "low_mid": (1.8, 6.7),
+    "boxiness": (4.2, 8.8),
+    "presence": (5.9, 9.1),
+    "air": (7.8, 11.4),
+    "ultra_high": (8.9, 13.6),
+}
+
+#: Fallback for a band with no measured spread of its own.
+BAND_MODERATE_DB = 4.4
+BAND_CRITICAL_DB = 9.0
 
 ANALYSIS_LOW_HZ = 60.0
 ANALYSIS_HIGH_HZ = 16000.0
@@ -68,14 +84,18 @@ MIN_BAND_COVERAGE = 0.75
 #: A frame counts as vocal activity if it sits within this many dB of the loudest frame.
 ACTIVE_RANGE_DB = 35.0
 
-#: Crest factor / passage spread above which compression is worth suggesting.
-CREST_COMPRESSION_DB = 18.0
-SPREAD_COMPRESSION_DB = 12.0
+#: Crest factor / passage spread past which a take is uneven *even for a raw vocal*.
+#: These are the p90 of good takes, which measure a 16.2 dB crest and a 22.7 dB spread.
+#: The old values flagged essentially every real recording — true, since nearly every
+#: vocal wants some compression, and therefore useless as a signal.
+CREST_COMPRESSION_DB = 19.5
+SPREAD_COMPRESSION_DB = 27.5
 
 SIBILANCE_BAND = (5000.0, 10000.0)
 SIBILANCE_BODY_BAND = (300.0, 3000.0)
-SIBILANCE_MODERATE = 0.020
-SIBILANCE_CRITICAL = 0.050
+#: Good takes measure a 0.009 median; these are their p90 and p99.
+SIBILANCE_MODERATE = 0.039
+SIBILANCE_CRITICAL = 0.113
 
 #: Mains hum candidates and how much a bin must stand out from its neighbours.
 HUM_FREQS = (50.0, 60.0)
@@ -237,13 +257,14 @@ def _band_scores(
             if scored
             else 0.0
         )
+        moderate, critical = BAND_THRESHOLDS.get(name, (BAND_MODERATE_DB, BAND_CRITICAL_DB))
         scores[name] = BandScore(
             band_name=name,
             low_hz=low,
             high_hz=high,
             energy=float(energies[name]),
             deviation_db=float(deviation),
-            severity=_severity(abs(deviation), BAND_MODERATE_DB, BAND_CRITICAL_DB),
+            severity=_severity(abs(deviation), moderate, critical),
             scored=scored,
         )
     return scores

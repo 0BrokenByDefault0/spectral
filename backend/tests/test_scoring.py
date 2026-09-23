@@ -67,10 +67,15 @@ def test_mud_lowers_clarity_and_balance(clean):
 
 
 def test_unscored_bands_are_left_out_of_balance():
-    """A band the source does not have must not drag the balance score down."""
+    """A band the source does not have must not drag the balance score down.
+
+    The scores are not expected to match: dropping the unscored bands drops whatever
+    they deviated by, so a band-limited take can score higher. What must never happen is
+    the reverse — being penalised for bands it was never judged on.
+    """
     limited = scoring.score(features(synth.with_lowpass(synth.vocal(), 8000.0)))
     full = scoring.score(features(synth.vocal()))
-    assert limited["tonal_balance"] == pytest.approx(full["tonal_balance"], abs=5.0)
+    assert limited["tonal_balance"] >= full["tonal_balance"] - 1.0
 
 
 def test_scores_reach_the_profile():

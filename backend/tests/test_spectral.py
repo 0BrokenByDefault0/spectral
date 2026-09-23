@@ -79,7 +79,8 @@ def test_reverb_lengthens_the_measured_tail(clean, clean_features):
 
 
 def test_level_swings_flag_compression(clean, clean_features):
-    swung = spectral.analyze_samples(synth.with_dynamics(clean, spread_db=24.0), synth.SR)
+    # Good takes measure a 22.7 dB spread, so an uneven one has to be worse than that.
+    swung = spectral.analyze_samples(synth.with_dynamics(clean, spread_db=30.0), synth.SR)
     assert swung.dynamic_range.loud_quiet_spread_db > (
         clean_features.dynamic_range.loud_quiet_spread_db
     )

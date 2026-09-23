@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.analysis import scoring
-from app.analysis.spectral import BAND_LIMIT_HZ
+from app.analysis.spectral import BAND_LIMIT_HZ, BAND_MODERATE_DB, BAND_THRESHOLDS
 from app.models.schemas import (
     ProcessingCategory,
     QualitativeAnalysis,
@@ -119,9 +119,12 @@ def _band_issues(spectral: SpectralFeatures) -> list[_Candidate]:
         band = spectral.frequency_bands.get(name)
         if band is None or not band.scored:
             continue
+        # What counts as too much depends on the band: good takes hold the low mids to
+        # under 2 dB but swing the top octave by 9.
+        moderate, _ = BAND_THRESHOLDS.get(name, (BAND_MODERATE_DB, BAND_MODERATE_DB))
         for direction, label, tags, blurb in rule:
             deviation = band.deviation_db * direction
-            if deviation < 3.0:
+            if deviation < moderate:
                 continue
             issues.append(
                 _Candidate(
