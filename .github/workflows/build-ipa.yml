@@ -1,0 +1,42 @@
+name: Build unsigned IPA
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build (no code signing)
+        run: |
+          xcodebuild \
+            -project Spectral.xcodeproj \
+            -scheme Spectral \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/Spectral.app Payload/
+          test -f Payload/Spectral.app/Web/index.html
+          zip -qry Spectral-unsigned.ipa Payload
+          ls -lh Spectral-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Spectral-unsigned-ipa
+          path: Spectral-unsigned.ipa

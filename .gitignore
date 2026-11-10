@@ -1,0 +1,6 @@
+Spectral.xcodeproj/
+build/
+Payload/
+*.ipa
+.DS_Store
+node_modules/
