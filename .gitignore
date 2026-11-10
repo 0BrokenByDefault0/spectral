@@ -4,3 +4,4 @@ Payload/
 *.ipa
 .DS_Store
 node_modules/
+dist/
